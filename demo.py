@@ -393,12 +393,13 @@ elif args.flag_test=='test':
     mirror_image_t2 = mirror_hsi(height, width, band, input2_normalize, patch=args.patches)
     x1_true = np.zeros((height*width, args.patches, args.patches, band), dtype=float)
     x2_true = np.zeros((height*width, args.patches, args.patches, band), dtype=float)
-    y_true=[]
+    y_true = []
     for i in range(height):
         for j in range(width):
             x1_true[i*width+j,:,:,:]=mirror_image_t1[i:(i+args.patches),j:(j+args.patches),:]
             x2_true[i*width+j,:,:,:]=mirror_image_t2[i:(i+args.patches),j:(j+args.patches),:]
-            y_true.append(i)
+            y_true.append(int(data_label[i, j]) - 1)  # ✅ true label, shifted to 0-based
+
     y_true = np.array(y_true)
     x1_true_band = gain_neighborhood_band(x1_true, band, args.band_patches, args.patches)
     x2_true_band = gain_neighborhood_band(x2_true, band, args.band_patches, args.patches)
@@ -429,21 +430,41 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.epoches//2
 if args.flag_test == 'test':
     model.load_state_dict(torch.load('./log/hygstan_farmland.pth'))
     model.eval()
-    # output classification maps
+
+    # output validation metrics
+    tar_v, pre_v = valid_epoch(model, label_true_loader, criterion, optimizer)
+    OA2, AA_mean2, Kappa2, AA2 = output_metric(tar_v, pre_v)
+    print("✅ VALIDATION METRICS")
+    print("OA: {:.4f} | AA: {:.4f} | Kappa: {:.4f}".format(OA2, AA_mean2, Kappa2))
+    print("Class-wise AA:", AA2.tolist())
+    print("**************************************************")
+
+    # output test classification map and metrics
     pre_u = test_epoch(model, label_true_loader, criterion, optimizer)
+
     prediction_matrix = np.zeros((height, width), dtype=float)
     for i in range(height):
         for j in range(width):
-            prediction_matrix[i,j] = pre_u[i*width+j] + 1
-    plt.subplot(1,1,1)
-    plt.imshow(prediction_matrix, colors.ListedColormap(color_matrix))
+            prediction_matrix[i, j] = pre_u[i * width + j] + 1
+
+    # Use a simple 2-class color map: class 1 → red, class 2 → green
+    color_matrix = np.array([[0, 0, 0], [1, 0, 0]])  # Black for class 1, Red for class 2
+
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(prediction_matrix, cmap=colors.ListedColormap(color_matrix))
     plt.xticks([])
     plt.yticks([])
+    plt.title("Predicted Change Map")
     plt.show()
-    from PIL import Image
-    im=Image.fromarray((1-(prediction_matrix-1))*255)
-    import ipdb; ipdb.set_trace()
-    savemat('matrix.mat',{'P':prediction_matrix, 'label':label})
+
+    # Also print predicted label stats
+    print("✅ TEST OUTPUT")
+    print("Test prediction label counts:")
+    unique, counts = np.unique(pre_u, return_counts=True)
+    for u, c in zip(unique, counts):
+        print(f"Label {int(u)+1}: {c} pixels")
+
 elif args.flag_test == 'train':
     print("start training")
     tic = time.time()
